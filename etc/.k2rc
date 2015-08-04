@@ -1,0 +1,14 @@
+plugin:
+  twitter:
+    module: kea2.plugin.twitter
+    recipient: markf
+  inout:
+    module: kea2.plugin.inout
+  skip_newer: {}
+executor:
+  gnu_parallel:
+    module: kea2.plugin.executor_gnu_parallel
+  simple:
+    module: kea2.plugin.executor_simple
+  print:
+    module: kea2.plugin.executor_print
