@@ -15,9 +15,18 @@ color_formatter = ColoredFormatter(
         }
 )
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logging.getLogger('k2')
 logging.getLogger().handlers[0].setFormatter(color_formatter)
 
-def get_logger(name):
-    return logging.getLogger(name)
+def get_logger(name, level=None):
+    rv = logging.getLogger(name)
+    if not level is None:
+        if isinstance(level, str):
+            rv.setLevel(dict(
+                debug=logging.DEBUG,
+                info=logging.INFO,
+                warning=logging.WARNING)[level])
+        else:
+            rv.setLevel(level)
+    return rv

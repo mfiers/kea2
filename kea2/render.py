@@ -11,23 +11,34 @@ lg.setLevel(INFO)
 re_find_param_r = (
     r'#p\s+'
     r'(?P<name>[A-Za-z][A-Za-z0-9_]*)'
-    r'(\s+(?P<keywords>[^\n]+))?'
+    r'([ \t]+(?P<keywords>[^\n]+))?'
     r'\n')
 
-re_find_param = re.compile(re_find_param_r, re.M)
+re_find_param_embed_r = (
+    r'{p\s+'
+    r'(?P<name>[A-Za-z][A-Za-z0-9_]*)'
+    r'([ \t]+(?P<keywords>[^\n]+))?'
+    r'\n')
+
+re_find_param = re.compile(re_find_param_r)
 
 ALLOWED_PARAMETER_FLAGS = """
     opt
-    int float
+    int     float
     hide
 """.split()
 
-def find_params(src, meta):
+def find_params(meta):
+
+    src = meta['_src']
     lg.debug("Start render level 01")
+    meta['_parameter_order'] = []
 
     for hit in re_find_param.finditer(src):
         pardata = hit.groupdict()
+        lg.debug(str(pardata))
         name = pardata['name']
+        meta['_parameter_order'].append(name)
 
         #parse keywords (if there are any)
         if pardata['keywords'] is None:
@@ -46,9 +57,13 @@ def find_params(src, meta):
         meta['_parameters'][name]['flags'] = flags
 
     # once again - now remove all parameters
-    return re_find_param.sub("", src).strip()
+    rv =  re_find_param.sub("", src).strip()
+    meta['_src'] = rv
 
-def replace_params_one(src, meta):
+
+def replace_params_one(meta):
+
+    src = meta['_src']
     #print(src)
     #print('-' * 80)
     for k in meta:
@@ -59,4 +74,4 @@ def replace_params_one(src, meta):
         #print('#####', k, meta[k], rex)
         #print(src)
         #print('-' * 80)
-    return src
+    meta['_src'] = src

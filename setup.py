@@ -35,6 +35,7 @@ setup(
     entry_points={
         'console_scripts': [
             'k2=kea2.cli:k2',
+            'k2r=kea2.cli:k2r',
         ],
     },
 )

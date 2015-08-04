@@ -3,78 +3,87 @@ import argparse
 from collections import defaultdict
 import copy
 import glob
+from hashlib import sha1
 import os
+from pprint import pprint
 import re
 import shlex
 import sys
+
+import yaml
+from path import Path
 
 from jinja2 import Template
 
 from kea2 import render
 from kea2.log import get_logger
+from kea2.util import run_hook, register_hook, get_recursive_dict
+from kea2 import util
 
+lg = get_logger('k2', 'warning')
 
-def format_template(src):
-    return " ".join(shlex.split(src))
-
-lg = get_logger('k2')
-#print(lg.handlers)
-
-def _get_base_argsparse():
+def _get_base_argsparse(add_template=True):
     parser = argparse.ArgumentParser()
-    parser.add_argument('--parse-level', type=int, default=2)
-    parser.add_argument('-x', '--executor', default='gnu_parallel')
-    parser.add_argument('template')
+    parser.add_argument('-x', '--executor', default='simple')
+    parser.add_argument('-X', '--start-execution', action='store_true')
+    if add_template:
+        parser.add_argument('template')
     return parser
 
-def _get_template(name):
-    if os.path.exists(name):
-        with open(name, 'r') as F:
-            src = F.read().strip()
-
-    template_dir = os.path
-
-def _phase_one(meta):
-    """ Identify command line parameters """
-    lg.debug('Start phase one')
+def _simplistic_parse(add_template):
+    parser = _get_base_argsparse(add_template=add_template)
     sysargs = copy.copy(sys.argv[1:])
-    #do not show help here yet
+
     while '-h' in sysargs:
         sysargs.remove('-h')
     while '--help' in sysargs:
         sysargs.remove('--help')
 
-    parser = _get_base_argsparse()
     args, rest = parser.parse_known_args(sysargs)
+    return args
 
-    src = _get_template(args.template)
+def phase_one(meta):
 
-    if args.parse_level == 0:
-        print(format_template(src))
-        exit(0)
+    """ Identify command line parameters """
+    lg.debug('Start phase one')
 
-    new_src = render.find_params(src, meta)
 
-    if args.parse_level == 1:
-        print('template', '-' * 50)
-        print(new_src)
-        print('parameters', '-' * 48)
-        for p, pdata in sorted(meta['_parameters'].items()):
-            print('{}\t{}'.format(
-                p,
-                pdata.get('help', ''),))
-        print('-' * 59)
-        exit(0)
+    if '--' in sys.argv:
+        meta['_src_in_argv'] = True
+        dd_index = sys.argv.index('--')
+        meta['_src'] = " ".join(sys.argv[dd_index+1:])
+        sys.argv = sys.argv[:dd_index]
+        args = _simplistic_parse(add_template=False)
+    else:
+        meta['_src_in_argv'] = False
+        args = _simplistic_parse(add_template=True)
+        lg.info('template name: %s', args.template)
+        meta['_src'] = util.get_template(meta, args.template)
 
-    return new_src
+    meta['_preargs'] = args
+    render.find_params(meta)
 
-def _parameter_replace(src, meta):
+def _dictify(d):
+    for k, v in d.items():
+        if isinstance(v, defaultdict):
+            d[k] = _dictify(v)
+    return dict(d)
+
+
+def parameter_replace(meta):
     """ Parser command line & replace parameters """
     lg.debug('Start phase two')
 
-    parser = _get_base_argsparse()
+    src = meta['_src']
 
-    for p, pdata in sorted(meta['_parameters'].items()):
+    if meta['_src_in_argv']:
+        parser = _get_base_argsparse(add_template=False)
+    else:
+        parser = _get_base_argsparse(add_template=True)
+
+
+    for p in meta['_parameter_order']:
+        pdata = meta['_parameters'][p]
 
         phelp = pdata.get('help', '')
 
@@ -99,14 +108,20 @@ def _parameter_replace(src, meta):
         if pf:
             phelp += ' ({})'.format(' '.join(pf))
 
-        if 'opt' in pdata['flags']:
+        if 'opt' in pdata['flags'] or pdef:
             pname = '--' + p
         else:
             pname = p
 
-        parser.add_argument(pname, type=ptype, help=phelp, default=pdef)
+        pkwargs = {}
+        if 'multi' in pdata['flags']:
+            pkwargs['nargs'] = '+'
+
+        parser.add_argument(pname, type=ptype, help=phelp, default=pdef,
+                            **pkwargs)
 
     args = parser.parse_args()
+    meta['_args'] = args
 
     #now parse arguments - and populate meta
     for p, pdata in meta['_parameters'].items():
@@ -114,22 +129,26 @@ def _parameter_replace(src, meta):
         meta[p] = val
 
     #first round of value replacement
-    return render.replace_params_one(src, meta)
+    render.replace_params_one(meta)
 
-def _expander(src, meta):
+def expander(meta):
     """
     prepare for globification
     """
 
+    src = meta['_src']
+
     #check shortcut(s)
     find_glob_shortcut = re.compile('(?<!{){\s*\*\s*}(?!})')
     no_glob_shortcuts = len(find_glob_shortcut.findall(src))
+
     if no_glob_shortcuts > 1:
         lg.critical("invalid template: >1 {*}")
     elif no_glob_shortcuts == 1:
         src = find_glob_shortcut.sub('{~star *}', src)
         src = re.sub('{{\s*\*\s*}}', '{{ star }}', src)
 
+    meta['_src'] = src
 
     #globify
     find_glob = re.compile((r'(?<!{){'
@@ -138,9 +157,9 @@ def _expander(src, meta):
                             r'(?P<pattern>[^}]+)'
                             r'\s*}(?!})'))
 
+    def globulator(meta, hit):
 
-    def globulator(src, meta, hit):
-
+        src = meta['_src']
         hitstart = hit.start()
         hitstop = hit.end()
 
@@ -150,15 +169,19 @@ def _expander(src, meta):
 
         src_repl = src[:hitstart] + repl_str + src[hitstop:]
         for srcword in shlex.split(src_repl):
+            srcword = srcword.rstrip(';')
             if repl_str in srcword:
                 break
 
         globword = srcword.replace(repl_str, hit.groupdict()['pattern'])
-
         glob_start = srcword.index(repl_str)
         glob_tail = len(srcword) - (srcword.index(repl_str) + len(repl_str))
+
+        lg.debug("glob: %s", globword)
         for g in glob.glob(globword):
-            newsrc = src_repl.replace(repl_str, g)
+
+            lg.debug("glob found: %s", g)
+            newsrc = src_repl.replace(srcword, g)
             newmeta = copy.copy(meta)
 
             repl_glob = srcword.index(repl_str)
@@ -167,63 +190,132 @@ def _expander(src, meta):
             gg = gg[glob_start:]
 
             newmeta[hit.groupdict()['name']] = gg
-            yield newsrc, newmeta
+            newmeta['_src'] = newsrc
+            yield newmeta
 
-    def _expander(src, meta):
+    def _expander(meta):
+        src = meta['_src']
+
+#        import logging
+#        lg.setLevel(logging.DEBUG)
+        lg.debug('expand: %s', src)
+
         hit = find_glob.search(src)
         if not hit:
-            yield src, meta
+            yield meta
             return
 
         d = hit.groupdict()
+        lg.debug("Expanding: %s %s %s", d['operator'], d['name'], d['pattern'])
         if d['operator'] == '~':
-            for nsrc, nmeta in globulator(src, meta, hit):
-                for nnsrc, nnmeta in _expander(nsrc, nmeta):
-                    yield nnsrc, nnmeta
+            for n_meta in globulator(meta, hit):
+                for nn_meta in _expander(n_meta):
+                    yield nn_meta
 
-    for i, (s, m) in enumerate(_expander(src, meta)):
-        m['i'] = i
-        t = Template(s)
-        s = t.render(m)
-        s = " ".join(shlex.split(s))
-        yield s, m
+    for i, _meta in enumerate(_expander(meta)):
+        _meta['i'] = i
+        template = Template(_meta['_src'])
+        _meta['_src'] = template.render(_dictify(_meta))
+        yield _meta
 
 
-GNU_PARALLEL_CMD_SCRIPT = Template("""
-echo {{ cmdlist }} | parallel
+def template_splitter(meta):
 
-""")
+    template = meta['_src']
 
-GNU_PARALLEL_CMD_LIST = Template(
-"""
-{% for cmd, meta in commands %}
-{{ cmd }}{% endfor %}
-""")
+    inblock = None
+    main = None
+    thisblock = []
+    seen = set()
+
+    lg.debug("Start template split")
+    for line in template.split("\n"):
+        if re.match('^###\s*[a-zA-Z_]+$', line):
+            if len(thisblock) > 0:
+                if inblock is None:
+                    lg.critical("code prior to blockheader in template")
+                    exit(-1)
+
+                meta['_blocks'][inblock] = "\n".join(thisblock)
+                seen.add(inblock)
+
+            block = line.strip().strip("#").strip()
+            inblock = block
+            thisblock = []
+        else:
+            thisblock.append(line)
+
+    if (not inblock is None) and len(thisblock) > 0:
+        meta['_blocks'][inblock] = "\n".join(thisblock)
+        seen.add(inblock)
+
+    if len(seen) == 0:
+        meta['_blocks']['main'] = template
+        return template
+
+    if not 'main' in seen:
+        lg.critical("no main block in temlate found")
+        exit(-1)
+
+    meta['_src'] = meta['_blocks']['main']
 
 
 def k2():
-    lg.info("Start k2")
 
     def make_dict():
         return defaultdict(make_dict)
-    meta = defaultdict(make_dict)
 
-    src = _phase_one(meta)
-    src = _parameter_replace(src, meta)
+    meta = get_recursive_dict()
+    meta['_conf'] = util.getconf()
+    meta['_original_commandline'] = " ".join(sys.argv)
+
+    for plugin in list(meta['_conf']['plugin']):
+        pdata = meta['_conf']['plugin'][plugin]
+        modname = pdata['module'] if 'module' in pdata \
+                  else 'kea2.plugin.{}'.format(plugin)
+        module = __import__(modname, fromlist=[''])
+        meta['_conf']['plugin']['_mod'] = module
+        if hasattr(module, 'init'):
+            module.init(meta)
+        else:
+            lg.warning("invalid plugin - no init function: %s", plugin)
+
+    # Phase one - PREPARG - preparse arguments
+    phase_one(meta)
+
+    # Load executor
+    executor = meta['_preargs'].executor
+    lg.info("Executor: %s", executor)
+    edata = meta['_conf']['executor'][executor]
+    modname = edata['module']
+    module = __import__(modname, fromlist=[''])
+    meta['_conf']['executor']['_mod'] = module
+    module.init(meta)
+
+    # Phase two - REPLARG - replace arguments
+    parameter_replace(meta)
+
+    # Phase three - SPLIT - split up the template into a main component
+    template_splitter(meta)
+
     commands = []
-    for src, meta in _expander(src, meta):
-        commands.append((src, meta))
 
-    cmdlist_file = 'commands.list'
-    cmd_file = 'k2run.sh'
+    # Phase four - EXPAND - expand templates
+    run_hook('pre_expand', meta)
 
-    clist = GNU_PARALLEL_CMD_LIST.render(
-        dict(commands = commands))
-    cmd = GNU_PARALLEL_CMD_SCRIPT.render(
-        dict(cmdlist = cmdlist_file))
+    global_meta = meta.copy()
+    meta['_global_meta'] = global_meta
 
-    with open(cmdlist_file, 'w') as F:
-        F.write(clist)
-    with open(cmd_file, 'w') as F:
-        F.write(cmd)
-        F.write("\n")
+    for meta in expander(meta):
+        run_hook('check_execute', meta)
+
+        if meta.get('_skip', False):
+            lg.debug("skipping")
+        else:
+            run_hook('to_execute', meta)
+
+    run_hook('pre_execute')
+
+    if meta['_args'].start_execution or global_meta.get('_src_in_argv'):
+        lg.info("start execution")
+        run_hook('execute')
