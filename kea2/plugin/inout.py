@@ -11,6 +11,7 @@ lg = get_logger(__name__, 'warning')
 
 find_inout = re.compile(r'{([ioxd])(?: ([A-Za-z][\w]*))?}')
 
+
 def parse_inout(meta):
 
     src = meta['_src']

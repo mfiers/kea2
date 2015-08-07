@@ -44,11 +44,15 @@ def pre_execute():
     jenv = Environment(loader=FileSystemLoader(tmpl_path))
 
     cmdlist = []
+    
     global_meta = EXECLIST[0]['_global_meta']
 
     for meta in EXECLIST:
         src = meta['_src']
         meta['command'] = src
+        #if meta['i'] == 0:
+        #    pprint(meta)
+
         cmd = jenv.get_template('command.template').render(meta)
         cmdlist.append(cmd)
 
@@ -80,9 +84,15 @@ def execute():
     if CMD_FILE is None:
         lg.crticial("cmd script is not defined")
         exit(-1)
+    CMD_FILE = CMD_FILE.abspath()
+    lg.info('executing: "%s"', CMD_FILE)
     rc = sp.call([CMD_FILE])
-    lg.warning('rc: %s', rc)
+    if rc == 0:
+        lg.info('finshed sucessfully')
+    else:
+        lg.warning('Error running script, rc: %s', rc)
 
+        
 def init(meta):
     lg.debug("Initializing gnu parallel executor")
     register_hook('to_execute', to_execute)

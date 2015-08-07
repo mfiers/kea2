@@ -15,7 +15,7 @@ color_formatter = ColoredFormatter(
         }
 )
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logging.getLogger('k2')
 logging.getLogger().handlers[0].setFormatter(color_formatter)
 

@@ -1,8 +1,11 @@
 
 from collections import defaultdict
+import glob
 import logging
 from pprint import pprint
 
+import pkg_resources as pr
+    
 from path import Path
 import yaml
 
@@ -20,6 +23,7 @@ def get_recursive_dict():
 HOOKS = get_recursive_dict()
 CONF = None
 
+
 def getconf():
     global CONF
 
@@ -34,8 +38,12 @@ def getconf():
             CONF.update(yaml.load(F))
     return CONF
 
+#
+# Templates
+#
 
-def get_template(meta, name):
+
+def get_template(meta, name, category='template'):
 
     template_path = Path(name)
     if template_path.exists():
@@ -43,20 +51,82 @@ def get_template(meta, name):
             src = F.read().strip()
             return src
 
-    template_folder = meta.get('template_folder')
-    if not template_folder:
-        template_folder = '~/kea2/template'
+    if (template_path + '.k2').exists():
+        with open((template_path + '.k2'), 'r') as F:
+            src = F.read().strip()
+            return src
 
-    lg.info("load template from: %s", template_folder)
+    if 'templates' in meta['_conf']:
+        tconf =  meta['_conf']['templates']
+    else:
+        tconf = [{'user': '~/kea2'},
+                 {'system': '/etc/kea2'} ]
 
-    template_file = Path('{}/{}.k2'.format(template_folder, name))\
-        .expanduser()
+    for tdict in tconf:
+        assert len(tdict) == 1
+        tname, tpath = list(tdict.items())[0]
+        tpath = Path(tpath).expanduser()
+        
+        lg.debug('check template set "%s" @ %s', tname, tpath)
 
-    if not template_file.exists():
-        lg.critical("cannot find template (%s)", template_file)
-        exit
-    with open(template_file, 'r') as F:
-        return F.read()
+        template_folder = tpath / category
+        
+        lg.debug("check for template in: %s", template_folder)
+        
+        template_file = Path('{}/{}.k2'.format(template_folder, name))\
+          .expanduser()
+
+        if  template_file.exists():
+            lg.debug('loading template for "%s" from "%s"', name, template_file)
+            with open(template_file, 'r') as F:
+                return F.read()
+            
+        # template was not found -- continue
+        lg.debug('cannot find template "%s" here', name)
+        
+    #still no template - check package resources
+    resname = 'etc//%s.k2' % (category, name)
+    lg.debug("check package resources @ %s", resname)
+    if not pr.resource_exists('kea2', resname):
+        #nothing - quit!
+        lg.critical('cannot find template: "%s"', name)
+        exit(-1)
+
+    #read & return
+    return pr.resource_string('kea2', resname).decode('UTF-8')
+
+
+def list_templates(meta, category='template'):
+
+    for locfile in glob.glob('*.k2'):
+        yield 'local', locfile
+
+    if 'templates' in meta['_conf']:
+        tconf =  meta['_conf']['templates']
+    else:
+        tconf = [{'user': '~/kea2'},
+                 {'system': '/etc/kea2'} ]
+
+    for tdict in tconf:
+        assert len(tdict) == 1
+        tname, tpath = list(tdict.items())[0]
+        tpath = Path(tpath).expanduser()
+        
+        lg.debug('list templates "%s" @ %s', tname, tpath)
+
+        template_folder = tpath / category
+
+        for fn in glob.glob(template_folder / '*.k2'):
+            fn = Path(fn).basename()
+            yield tname, fn
+
+    #list package resources
+    resdir = 'etc/%s' % (category)
+    lg.debug("list package resources from: %s", resdir)
+    for fn in pr.resource_listdir('kea2', resdir):
+        yield 'package', fn
+
+
 
 def get_template_name(meta):
 
@@ -77,6 +147,31 @@ def get_template_name(meta):
         else:
             template_name = 'run'
     return template_name
+
+
+
+#
+# Plugins & Hooks
+#
+
+def register_command(meta, name, function):
+    sp = meta['_kea2_subparser'].add_parser(name)
+    meta['_subparsers'][name] = sp
+    meta['_commands'][name] = function
+    return sp
+
+def load_plugins(meta, system):
+    for plugin in list(meta['_conf'][system]):
+        pdata = meta['_conf'][system][plugin]
+        modname = pdata['module'] \
+          if 'module' in pdata \
+          else 'kea2.{}.{}'.format(system, plugin)
+        module = __import__(modname, fromlist=[''])
+        meta['_conf'][plugin]['_mod'] = module
+        if hasattr(module, 'init'):
+            module.init(meta)
+        else:
+            lg.warning("invalid plugin - no init function: %s", plugin)
 
 
 def run_hook(hook_name, *args, **kwargs):

@@ -31,6 +31,7 @@ def file_time_report(ot, idxt):
         flag = '<' if t > oldest_output else ' '
         print('%s %s %-10s %s %s' % (flag, c, g, fmt(t), f))
 
+        
 def check_newer(meta):
 
     io = meta['_io']

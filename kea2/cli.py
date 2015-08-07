@@ -1,4 +1,4 @@
-
+ 
 import argparse
 from collections import defaultdict
 import copy
@@ -22,13 +22,28 @@ from kea2 import util
 
 lg = get_logger('k2', 'warning')
 
+
 def _get_base_argsparse(add_template=True):
     parser = argparse.ArgumentParser()
     parser.add_argument('-x', '--executor', default='simple')
-    parser.add_argument('-X', '--start-execution', action='store_true')
+    parser.add_argument('-X', '--execute', action='store_const', help='run immediately',
+                        const='run', dest='execute')
+    parser.add_argument('-N', '--do-not-execute', action='store_const', help='do not run',
+                        const='notrun', dest='execute')
+
+    #register shortcuts to executors
+    cnf = util.getconf()
+    for xname, xconf in cnf['executor'].items():
+        altflag = xconf.get('altflag')
+        if altflag is None:
+            continue
+        
+        parser.add_argument('--' + altflag, dest='executor', action='store_const',
+                            const=xname, help='use %s executor' % xname)
     if add_template:
         parser.add_argument('template')
     return parser
+
 
 def _simplistic_parse(add_template):
     parser = _get_base_argsparse(add_template=add_template)
@@ -258,7 +273,33 @@ def template_splitter(meta):
         exit(-1)
 
     meta['_src'] = meta['_blocks']['main']
+    
 
+def k2_manage():
+    """
+    Manage k2
+    """
+
+    meta = get_recursive_dict()
+    meta['_conf'] = util.getconf()
+    meta['_parser'] = argparse.ArgumentParser()
+    meta['_kea2_subparser'] = meta['_parser'].add_subparsers(dest='command')
+    
+    util.load_plugins(meta, 'manage_plugin')
+
+    meta['_args'] = meta['_parser'].parse_args()
+    command = meta['_args'].command
+
+    if command is None:
+        meta['_parser'].print_help()
+        exit()
+
+    meta['_commands'][command](meta)
+    
+#    if args.command == 'list':
+#        k2m_list(argsa)
+
+    
 
 def k2():
 
@@ -269,16 +310,18 @@ def k2():
     meta['_conf'] = util.getconf()
     meta['_original_commandline'] = " ".join(sys.argv)
 
-    for plugin in list(meta['_conf']['plugin']):
-        pdata = meta['_conf']['plugin'][plugin]
-        modname = pdata['module'] if 'module' in pdata \
-                  else 'kea2.plugin.{}'.format(plugin)
-        module = __import__(modname, fromlist=[''])
-        meta['_conf']['plugin']['_mod'] = module
-        if hasattr(module, 'init'):
-            module.init(meta)
-        else:
-            lg.warning("invalid plugin - no init function: %s", plugin)
+    util.load_plugins(meta, 'plugin')
+    
+    # for plugin in list(meta['_conf']['plugin']):
+    #     pdata = meta['_conf']['plugin'][plugin]
+    #     modname = pdata['module'] if 'module' in pdata \
+    #               else 'kea2.plugin.{}'.format(plugin)
+    #     module = __import__(modname, fromlist=[''])
+    #     meta['_conf'][plugin]['_mod'] = module
+    #     if hasattr(module, 'init'):
+    #         module.init(meta)
+    #     else:
+    #         lg.warning("invalid plugin - no init function: %s", plugin)
 
     # Phase one - PREPARG - preparse arguments
     phase_one(meta)
@@ -289,7 +332,7 @@ def k2():
     edata = meta['_conf']['executor'][executor]
     modname = edata['module']
     module = __import__(modname, fromlist=[''])
-    meta['_conf']['executor']['_mod'] = module
+    meta['_conf'][executor]['_mod'] = module
     module.init(meta)
 
     # Phase two - REPLARG - replace arguments
@@ -316,6 +359,7 @@ def k2():
 
     run_hook('pre_execute')
 
-    if meta['_args'].start_execution or global_meta.get('_src_in_argv'):
+    if meta['_args'].execute == 'run' or \
+      (global_meta.get('_src_in_argv') and not  global_meta['_args'].execute == 'notrun'):
         lg.info("start execution")
         run_hook('execute')

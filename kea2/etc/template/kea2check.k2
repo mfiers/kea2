@@ -1,0 +1,4 @@
+#p input
+#p output
+
+echo kea2 check {i} {{ input }} {o} {{ output }}
