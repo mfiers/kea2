@@ -17,8 +17,17 @@ lg = kea2.log.get_logger(__name__)
 
 
 def printer(meta):
-    lg.debug("register for execution")
-    print(meta['_src'])
+
+    tmpl_path = Path('~/kea2/executor/simple/').expanduser()
+
+    jenv = Environment(loader=FileSystemLoader(tmpl_path))
+    util.register_jinja2_filters(jenv)
+
+    src = meta['_src']
+    meta['command'] = src
+
+    cmd = jenv.get_template('command.template').render(meta)
+    print(cmd)
 
 
 def init(meta):

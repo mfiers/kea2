@@ -44,7 +44,7 @@ def find_params(meta):
         if pardata['keywords'] is None:
             keywords = []
         else:
-            keywords = shlex.split(pardata['keywords'])
+            keywords = re.findall(r'''("[^"]+"|'[^']+'|[^\s]+)''', pardata['keywords'])
 
         flags = []
         for kw in keywords:

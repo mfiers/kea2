@@ -3,7 +3,6 @@ from itertools import chain
 import os
 from pprint import pprint
 import re
-import shlex
 import time
 
 from path import Path
@@ -31,7 +30,7 @@ def file_time_report(ot, idxt):
         flag = '<' if t > oldest_output else ' '
         print('%s %s %-10s %s %s' % (flag, c, g, fmt(t), f))
 
-        
+
 def check_newer(meta):
 
     io = meta['_io']

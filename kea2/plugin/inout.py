@@ -1,7 +1,6 @@
 
 import os
 import re
-import shlex
 from path import Path
 
 from kea2.util import register_hook
@@ -9,7 +8,7 @@ from kea2.log import get_logger
 
 lg = get_logger(__name__, 'warning')
 
-find_inout = re.compile(r'{([ioxd])(?: ([A-Za-z][\w]*))?}')
+find_inout = re.compile(r'{([imoxd])(?: ([A-Za-z][\w]*))?}')
 
 
 def parse_inout(meta):
@@ -32,10 +31,12 @@ def parse_inout(meta):
                 i='input',
                 o='output',
                 x='executable',
+                m='misc',
                 d='database')[category]
 
         lastmatch = 0
         filenames = []
+
         while True:
             try:
                 matchloc = src_split.index(match, lastmatch) + 1

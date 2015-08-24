@@ -2,10 +2,13 @@
 from collections import defaultdict
 import glob
 import logging
+import os
 from pprint import pprint
 
 import pkg_resources as pr
-    
+
+
+
 from path import Path
 import yaml
 
@@ -23,7 +26,6 @@ def get_recursive_dict():
 HOOKS = get_recursive_dict()
 CONF = None
 
-
 def getconf():
     global CONF
 
@@ -39,9 +41,24 @@ def getconf():
     return CONF
 
 #
-# Templates
+# Extra Jinja filters
 #
 
+def _jinja_filter_basename(fn, extension=None):
+    rv = os.path.basename(fn)
+    extension = extension.strip()
+    if not extension is None and rv.endswith(extension):
+        rv = rv[:-len(extension)]
+    return rv
+
+
+def register_jinja2_filters(jenv):
+    jenv.filters['basename'] = _jinja_filter_basename
+
+
+#
+# Templates
+#
 
 def get_template(meta, name, category='template'):
 
@@ -66,26 +83,27 @@ def get_template(meta, name, category='template'):
         assert len(tdict) == 1
         tname, tpath = list(tdict.items())[0]
         tpath = Path(tpath).expanduser()
-        
+
         lg.debug('check template set "%s" @ %s', tname, tpath)
 
         template_folder = tpath / category
-        
+
         lg.debug("check for template in: %s", template_folder)
-        
+
         template_file = Path('{}/{}.k2'.format(template_folder, name))\
           .expanduser()
 
+        print(template_file)
         if  template_file.exists():
             lg.debug('loading template for "%s" from "%s"', name, template_file)
             with open(template_file, 'r') as F:
                 return F.read()
-            
+
         # template was not found -- continue
         lg.debug('cannot find template "%s" here', name)
-        
+
     #still no template - check package resources
-    resname = 'etc//%s.k2' % (category, name)
+    resname = 'etc//%s/%s.k2' % (category, name)
     lg.debug("check package resources @ %s", resname)
     if not pr.resource_exists('kea2', resname):
         #nothing - quit!
@@ -111,7 +129,7 @@ def list_templates(meta, category='template'):
         assert len(tdict) == 1
         tname, tpath = list(tdict.items())[0]
         tpath = Path(tpath).expanduser()
-        
+
         lg.debug('list templates "%s" @ %s', tname, tpath)
 
         template_folder = tpath / category

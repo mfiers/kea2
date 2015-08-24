@@ -1,4 +1,4 @@
- 
+
 import argparse
 from collections import defaultdict
 import copy
@@ -13,7 +13,7 @@ import sys
 import yaml
 from path import Path
 
-from jinja2 import Template
+from jinja2 import Environment
 
 from kea2 import render
 from kea2.log import get_logger
@@ -21,6 +21,9 @@ from kea2.util import run_hook, register_hook, get_recursive_dict
 from kea2 import util
 
 lg = get_logger('k2', 'warning')
+
+JENV = Environment()
+util.register_jinja2_filters(JENV)
 
 
 def _get_base_argsparse(add_template=True):
@@ -37,7 +40,7 @@ def _get_base_argsparse(add_template=True):
         altflag = xconf.get('altflag')
         if altflag is None:
             continue
-        
+
         parser.add_argument('--' + altflag, dest='executor', action='store_const',
                             const=xname, help='use %s executor' % xname)
     if add_template:
@@ -229,8 +232,22 @@ def expander(meta):
 
     for i, _meta in enumerate(_expander(meta)):
         _meta['i'] = i
-        template = Template(_meta['_src'])
-        _meta['_src'] = template.render(_dictify(_meta))
+
+        #Jinja2 render template
+        try:
+            template = JENV.from_string(_meta['_src'])
+        except:
+            lg.critical("Invalid Template:")
+            lg.critical(_meta['_src'])
+            raise
+
+        try:
+            _meta['_src'] = template.render(_dictify(_meta))
+        except:
+            lg.critical("Invalid Template:")
+            lg.critical(_meta['_src'])
+            raise
+
         yield _meta
 
 
@@ -244,10 +261,11 @@ def template_splitter(meta):
     seen = set()
 
     lg.debug("Start template split")
-    for line in template.split("\n"):
+    for i, line in enumerate(template.split("\n")):
         if re.match('^###\s*[a-zA-Z_]+$', line):
             if len(thisblock) > 0:
                 if inblock is None:
+                    print(thisblock)
                     lg.critical("code prior to blockheader in template")
                     exit(-1)
 
@@ -258,7 +276,14 @@ def template_splitter(meta):
             inblock = block
             thisblock = []
         else:
-            thisblock.append(line)
+            if i == 0 and line[:2] == '#!':
+                #ignore shebang
+                continuepip
+            elif line.strip() == '':
+                #ignore empty lines
+                continue
+            else:
+                thisblock.append(line)
 
     if (not inblock is None) and len(thisblock) > 0:
         meta['_blocks'][inblock] = "\n".join(thisblock)
@@ -273,7 +298,7 @@ def template_splitter(meta):
         exit(-1)
 
     meta['_src'] = meta['_blocks']['main']
-    
+
 
 def k2_manage():
     """
@@ -284,7 +309,7 @@ def k2_manage():
     meta['_conf'] = util.getconf()
     meta['_parser'] = argparse.ArgumentParser()
     meta['_kea2_subparser'] = meta['_parser'].add_subparsers(dest='command')
-    
+
     util.load_plugins(meta, 'manage_plugin')
 
     meta['_args'] = meta['_parser'].parse_args()
@@ -295,33 +320,15 @@ def k2_manage():
         exit()
 
     meta['_commands'][command](meta)
-    
-#    if args.command == 'list':
-#        k2m_list(argsa)
 
-    
 
 def k2():
-
-    def make_dict():
-        return defaultdict(make_dict)
 
     meta = get_recursive_dict()
     meta['_conf'] = util.getconf()
     meta['_original_commandline'] = " ".join(sys.argv)
 
     util.load_plugins(meta, 'plugin')
-    
-    # for plugin in list(meta['_conf']['plugin']):
-    #     pdata = meta['_conf']['plugin'][plugin]
-    #     modname = pdata['module'] if 'module' in pdata \
-    #               else 'kea2.plugin.{}'.format(plugin)
-    #     module = __import__(modname, fromlist=[''])
-    #     meta['_conf'][plugin]['_mod'] = module
-    #     if hasattr(module, 'init'):
-    #         module.init(meta)
-    #     else:
-    #         lg.warning("invalid plugin - no init function: %s", plugin)
 
     # Phase one - PREPARG - preparse arguments
     phase_one(meta)
