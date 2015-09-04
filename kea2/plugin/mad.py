@@ -27,16 +27,19 @@ def add_mad_stuff(meta):
     cl_tempfile.write(meta['_src'].encode('UTF-8'))
     cl_tempfile.close()
 
+    mad_save = []
     for cat in iodata:
         for fgroup in iodata[cat]:
             for fname in iodata[cat][fgroup]:
-                to_add.append('# mad record %s/%s file: %s' % (cat, fgroup, fname))
-                to_add.append('mad save %s' % fname)
+                mad_save.append(fname)
                 for_ta[{'i': 'input',
                         'o': 'output',
                         'm': 'misc',
                         'x': 'executable',
                         'd': 'db'}[cat]].append('%s:%s' % (fgroup, fname))
+
+    to_add.append('mad save \\\n    %s' % " \\\n    ".join(mad_save))
+    to_add.append("")
 
     #record transcation
     if for_ta['output']:

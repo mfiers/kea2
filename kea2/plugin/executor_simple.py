@@ -67,19 +67,16 @@ def pre_execute():
 
     CMD_FILE = Path('{}.sh'.format(template_name))
 
+    try:
+        output = git('rev-parse')
+        ingit = True
+        lg.debug("In a git repository - add & commit the script")
+    except ErrorReturnCode as e:
+        lg.warning("not git - backing up the cmd file")
+        ingit = False
 
     if CMD_FILE.exists():
         #check if in git:
-
-        try:
-            output = git('rev-parse')
-            ingit = True
-            lg.debug("In a git repository - add & commit the script")
-        except ErrorReturnCode as e:
-            lg.warning("not git - backing up the cmd file")
-            ingit = False
-
-
         if ingit:
             for line in git.status('-s', CMD_FILE):
                 _status, _filename = line.strip().split(None, 1)

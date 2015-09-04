@@ -9,7 +9,6 @@ plugin:
     recipient: markf
   inout:
     module: kea2.plugin.inout
-  skip_newer: {}
   mad: {}
 executor:
   gnu_parallel:
@@ -19,3 +18,4 @@ executor:
     module: kea2.plugin.executor_simple
   print:
     module: kea2.plugin.executor_print
+    altflag: xp
