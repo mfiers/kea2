@@ -9,6 +9,7 @@ from pprint import pprint
 import re
 import shlex
 import sys
+import uuid
 
 import yaml
 from path import Path
@@ -88,7 +89,7 @@ def _dictify(d):
     return dict(d)
 
 
-def parameter_replace(meta):
+def parameter_parse(meta):
     """ Parser command line & replace parameters """
     lg.debug('Start phase two')
 
@@ -101,6 +102,7 @@ def parameter_replace(meta):
 
 
     for p in meta['_parameter_order']:
+
         pdata = meta['_parameters'][p]
 
         phelp = pdata.get('help', '')
@@ -144,111 +146,41 @@ def parameter_replace(meta):
     #now parse arguments - and populate meta
     for p, pdata in meta['_parameters'].items():
         val = getattr(args, p)
-        meta[p] = val
+        pval = parameter_expander(p, val)
+        if isinstance(pval, list):
+            if not '_expanded_parameters' in meta:
+                meta['_expanded_parameters'] = []
+            meta['_expanded_parameters'].append(p)
+        meta[p] = pval
 
-    #first round of value replacement
-    render.replace_params_one(meta)
-
-def expander(meta):
+def parameter_expander(pname, value):
     """
-    prepare for globification
+
     """
 
-    src = meta['_src']
+    re_parfind = re.compile('(?<!\{)\{\s*\*\s*([A-Za-z_]\w*)?\s*\}(?!\})')
 
-    #check shortcut(s)
-    find_glob_shortcut = re.compile('(?<!{){\s*\*\s*}(?!})')
-    no_glob_shortcuts = len(find_glob_shortcut.findall(src))
+    mtch = re_parfind.search(str(value))
+    if mtch is None:
+        return value
 
-    if no_glob_shortcuts > 1:
-        lg.critical("invalid template: >1 {*}")
-    elif no_glob_shortcuts == 1:
-        src = find_glob_shortcut.sub('{~star *}', src)
-        src = re.sub('{{\s*\*\s*}}', '{{ star }}', src)
+    value = str(value)
+    globpat = re_parfind.sub('*', value)
+    assert re_parfind.search(globpat) is None
+    replac = glob.glob(globpat)
 
-    meta['_src'] = src
+    cutright = len(value) - mtch.end()
+    cutleft = mtch.start()
+    def pm(r):
+        _t = {pname: r}
+        name = mtch.groups()[0]
+        if name is None:
+            name = 'g'
+        _t[name] = r[cutleft:-cutright]
+        return _t
 
-    #globify
-    find_glob = re.compile((r'(?<!{){'
-                            r'(?P<operator>~)'
-                            r'(?P<name>[a-zA-Z]\w*) '
-                            r'(?P<pattern>[^}]+)'
-                            r'\s*}(?!})'))
+    return [pm(x) for x in replac]
 
-    def globulator(meta, hit):
-
-        src = meta['_src']
-        hitstart = hit.start()
-        hitstop = hit.end()
-
-        #random, hopefully unique, replacement string that we can retrieve
-        rnd = 'QqZzRrHhGgTtUuVvWw'
-        repl_str = (rnd * (int((hitstop - hitstart) / len(rnd)) + 2))[:hitstop-hitstart]
-
-        src_repl = src[:hitstart] + repl_str + src[hitstop:]
-        for srcword in shlex.split(src_repl):
-            srcword = srcword.rstrip(';')
-            if repl_str in srcword:
-                break
-
-        globword = srcword.replace(repl_str, hit.groupdict()['pattern'])
-        glob_start = srcword.index(repl_str)
-        glob_tail = len(srcword) - (srcword.index(repl_str) + len(repl_str))
-
-        lg.debug("glob: %s", globword)
-        for g in glob.glob(globword):
-
-            lg.debug("glob found: %s", g)
-            newsrc = src_repl.replace(srcword, g)
-            newmeta = copy.copy(meta)
-
-            repl_glob = srcword.index(repl_str)
-            gg = copy.copy(g)
-            gg = gg[:-glob_tail]
-            gg = gg[glob_start:]
-
-            newmeta[hit.groupdict()['name']] = gg
-            newmeta['_src'] = newsrc
-            yield newmeta
-
-    def _expander(meta):
-        src = meta['_src']
-
-#        import logging
-#        lg.setLevel(logging.DEBUG)
-        lg.debug('expand: %s', src)
-
-        hit = find_glob.search(src)
-        if not hit:
-            yield meta
-            return
-
-        d = hit.groupdict()
-        lg.debug("Expanding: %s %s %s", d['operator'], d['name'], d['pattern'])
-        if d['operator'] == '~':
-            for n_meta in globulator(meta, hit):
-                for nn_meta in _expander(n_meta):
-                    yield nn_meta
-
-    for i, _meta in enumerate(_expander(meta)):
-        _meta['i'] = i
-
-        #Jinja2 render template
-        try:
-            template = JENV.from_string(_meta['_src'])
-        except:
-            lg.critical("Invalid Template:")
-            lg.critical(_meta['_src'])
-            raise
-
-        try:
-            _meta['_src'] = template.render(_dictify(_meta))
-        except:
-            lg.critical("Invalid Template:")
-            lg.critical(_meta['_src'])
-            raise
-
-        yield _meta
 
 
 def template_splitter(meta):
@@ -278,7 +210,7 @@ def template_splitter(meta):
         else:
             if i == 0 and line[:2] == '#!':
                 #ignore shebang
-                continuepip
+                continue
             elif line.strip() == '':
                 #ignore empty lines
                 continue
@@ -297,6 +229,7 @@ def template_splitter(meta):
         lg.critical("no main block in temlate found")
         exit(-1)
 
+    # put the main block back into _src for postprocesing
     meta['_src'] = meta['_blocks']['main']
 
 
@@ -319,6 +252,7 @@ def k2_manage():
         meta['_parser'].print_help()
         exit()
 
+    #RUN
     meta['_commands'][command](meta)
 
 
@@ -333,30 +267,76 @@ def k2():
     # Phase one - PREPARG - preparse arguments
     phase_one(meta)
 
-    # Load executor
+    # Load proper executor
     executor = meta['_preargs'].executor
     lg.info("Executor: %s", executor)
     edata = meta['_conf']['executor'][executor]
     modname = edata['module']
-    module = __import__(modname, fromlist=[''])
+    try:
+        module = __import__(modname, fromlist=[''])
+    except:
+        lg.critical("error importing module %s", modname)
+        lg.critical("executor conf: %s", str(meta['_conf']['executor']))
+        raise
     meta['_conf'][executor]['_mod'] = module
     module.init(meta)
 
-    # Phase two - REPLARG - replace arguments
-    parameter_replace(meta)
+    # Phase two - parse command line parameters
+    parameter_parse(meta)
 
-    # Phase three - SPLIT - split up the template into a main component
+    # Phase three - split templates in prolog, epilogs & main
     template_splitter(meta)
-
-    commands = []
-
-    # Phase four - EXPAND - expand templates
-    run_hook('pre_expand', meta)
 
     global_meta = meta.copy()
     meta['_global_meta'] = global_meta
 
-    for meta in expander(meta):
+    # Phase three - expand templates
+    run_hook('pre_expand', meta)
+
+    def expander(meta):
+        for pname, pdata in meta['_parameters'].items():
+            pvalue = meta[pname]
+            if isinstance(pvalue, list) and not 'multi' in pdata['flags']:
+                for pvar in pvalue:
+                    assert isinstance(pvar, dict)
+                    meta = copy.copy(meta)
+                    meta.update(pvar)
+                    yield from expander(meta)
+                break
+        else:
+            uid = ''
+            if meta['_expanded_parameters']:
+                ep = sorted(meta['_expanded_parameters'])
+                uid = "-".join([meta[x] for x in ep]).replace(' ', '')
+            meta['_uid'] = uid
+            yield copy.copy(meta)
+
+
+    for i, meta in enumerate(expander(meta)):
+        meta['i'] = i
+
+        meta['_blocks']['main'] = meta['_src']
+        for bname, block in meta['_blocks'].items():
+            try:
+                template = JENV.from_string(block)
+            except:
+                lg.critical("Invalid Template in %s", bname)
+                lg.critical(block)
+                raise
+
+            try:
+                lastblock = False
+                while (lastblock is None) or (lastblock != block):
+                    lastblock = block
+                    block = template.render(_dictify(meta))
+                    template = JENV.from_string(block)
+            except:
+                lg.critical("Template render problem in %s", bname)
+                lg.critical(block)
+                raise
+            meta['_blocks'][bname] = block
+        meta['_src'] = meta['_blocks']['main']
+
         run_hook('check_execute', meta)
 
         if meta.get('_skip', False):
@@ -364,9 +344,13 @@ def k2():
         else:
             run_hook('to_execute', meta)
 
+
     run_hook('pre_execute')
 
     if meta['_args'].execute == 'run' or \
       (global_meta.get('_src_in_argv') and not  global_meta['_args'].execute == 'notrun'):
         lg.info("start execution")
         run_hook('execute')
+
+
+    run_hook('post_execute')

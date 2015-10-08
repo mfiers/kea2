@@ -4,9 +4,6 @@ templates:
   - user: ~/kea2
   - system: /etc/kea2
 plugin:
-  twitter:
-    module: kea2.plugin.twitter
-    recipient: markf
   inout:
     module: kea2.plugin.inout
   mad: {}

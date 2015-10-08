@@ -1,0 +1,14 @@
+#!/bin/bash
+
+{{ _blocks.prolog }}
+
+echo "Start run"
+
+parallel <<EOF
+{% for c in commandlist %}{{ c }}
+{% endfor -%}
+EOF
+
+echo "Stop run"
+
+{{ _blocks.epilog }}
