@@ -307,7 +307,11 @@ def k2():
             uid = ''
             if meta['_expanded_parameters']:
                 ep = sorted(meta['_expanded_parameters'])
-                uid = "-".join([meta[x] for x in ep]).replace(' ', '')
+                def _fix(v):
+                    if v.startswith('.'):
+                        v = os.path.basename(v)
+                    return v
+                uid = "-".join([_fix(meta[x]) for x in ep]).replace(' ', '')
             meta['_uid'] = uid
             yield copy.copy(meta)
 
