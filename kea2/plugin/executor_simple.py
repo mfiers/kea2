@@ -22,6 +22,8 @@ EXECLIST = []
 GLOBALHASH = sha1()
 CMD_FILE = None
 
+EXECNAME = 'simple'
+
 def to_execute(meta):
     lg.debug("register for execution")
     global EXECLIST
@@ -46,10 +48,12 @@ def pre_execute():
     template_name = util.get_template_name(global_meta)
 
     for i, meta in enumerate(EXECLIST):
-        cmd = util.get_jinja_template(meta, 'command.template', 'executor/simple')
+        cmd = util.get_jinja_template(meta, 'command.template', 'executor/' + EXECNAME)
         cmd = util.recursive_render(cmd, meta)
+        if i == 0:
+            print(cmd)
         meta['_cmd_file'] = util.script_write(cmd, './kea2', meta['_uid'])
-        cmdrunner = util.get_jinja_template(meta, 'command_runner.template', 'executor/simple')
+        cmdrunner = util.get_jinja_template(meta, 'command_runner.template', 'executor/' + EXECNAME)
         cmdrunner = util.recursive_render(cmdrunner, meta)
         cmdlist.append(cmdrunner)
 
@@ -63,7 +67,7 @@ def pre_execute():
         lg.info("not git - backing up the cmd file")
         ingit = False
 
-    runsh = util.get_jinja_template(meta, 'run.template', 'executor/simple').render(global_meta)
+    runsh = util.get_jinja_template(meta, 'run.template', 'executor/' + EXECNAME).render(global_meta)
 
     cmd_file = template_name
     lg.info("write command script: %s", CMD_FILE)
