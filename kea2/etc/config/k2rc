@@ -9,7 +9,8 @@ plugin:
     recipient: markf
   inout:
     module: kea2.plugin.inout
-  mad: {}
+  mad:
+    enabled: false
 executor:
   gnu_parallel:
     module: kea2.plugin.executor_gnu_parallel
