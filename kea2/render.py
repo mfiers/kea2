@@ -64,14 +64,11 @@ def find_params(meta):
 def replace_params_one(meta):
 
     src = meta['_src']
-    #print(src)
+
     #print('-' * 80)
     for k in meta:
         if k[0] == '_': continue
         rex = r'{{\s*' + k + '\s*}}'
         find_k = re.compile(rex, re.M)
         src = find_k.sub(str(meta[k]), src)
-        #print('#####', k, meta[k], rex)
-        #print(src)
-        #print('-' * 80)
     meta['_src'] = src

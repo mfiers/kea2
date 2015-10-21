@@ -1,15 +1,17 @@
 
 from collections import defaultdict
+import functools
 import glob
 import logging
 import os
-from pprint import pprint
-
 import pkg_resources as pr
+from pprint import pprint
+import time
 
 
-
+from jinja2 import Environment
 from path import Path
+from sh import git, ErrorReturnCode
 import yaml
 
 import kea2.log
@@ -34,10 +36,15 @@ def getconf():
 
     CONF = get_recursive_dict()
 
+    resname = 'etc/config/k2rc'
+    if pr.resource_exists('kea2', resname):
+        CONF.update(yaml.load(pr.resource_string('kea2', resname).decode('UTF-8')))
+
     conf_file = Path('~/.k2rc').expanduser()
     if conf_file.exists():
         with open(conf_file, 'r') as F:
             CONF.update(yaml.load(F))
+
     return CONF
 
 #
@@ -52,8 +59,83 @@ def _jinja_filter_basename(fn, extension=None):
     return rv
 
 
+def recursive_render(tmpl, data):
+    last_out = False
+    while True:
+        out = tmpl.render(data)
+        if (not last_out is False) and (last_out == out):
+            break
+        tmpl = get_jinja_environment().from_string(out)
+        last_out = out
+    return out
+
+
 def register_jinja2_filters(jenv):
     jenv.filters['basename'] = _jinja_filter_basename
+
+
+@functools.lru_cache(1)
+def get_jinja_environment():
+    jenv = Environment()
+    register_jinja2_filters(jenv)
+    return jenv
+
+
+def script_write(script, dirname, uid, backup_dir=None):
+
+    dirname = Path(dirname)
+    if backup_dir is None:
+        backup_dir = dirname /  'backup'
+    else:
+        backup_dir = Path(backup_dir)
+
+    if uid:
+        cmd_file = dirname / ('kea2.%s.sh' % uid)
+    else:
+        cmd_file = dirname / 'kea2.sh'
+
+    if not dirname.exists():
+        os.makedirs(dirname)
+
+    try:
+        output = git('rev-parse')
+        ingit = True
+        lg.debug("In a git repository - add & commit the script")
+    except ErrorReturnCode as e:
+        lg.info("not git - backing up the cmd file")
+        ingit = False
+
+    if cmd_file.exists():
+        #check if in git:
+        if ingit:
+            for line in git.status('-s', cmd_file):
+                _status, _filename = line.strip().split(None, 1)
+                lg.warning('git status prewrite: %s %s', _status, _filename)
+                if _filename != cmd_file:
+                    lg.warning("this is not the file we want: %s", _filename)
+                    continue
+                if _status == '??':
+                    git.add(cmd_file)
+                if _status in ['??', 'A', 'M']:
+                    lg.warning("git commit old version of %s", cmd_file)
+                    git.commit(cmd_file, m='autocommit by kea2 - prepare for new version')
+        else:
+            #not in a git repository - copy file to a temp file
+            ocf_stat = cmd_file.stat()
+            timestamp = time.strftime("%Y-%m-%d_%H:%M:%S",
+                                      time.localtime(ocf_stat.st_ctime))
+            if not backup_dir.exists():
+                os.makedirs(backup_dir)
+            new_file_name = backup_dir / ('_kea2.%s.%s.sh' % (uid, timestamp))
+            lg.info("rename old %s to %s", cmd_file, new_file_name)
+            cmd_file.move(new_file_name)
+
+    script = script.rstrip()
+    with open(cmd_file, 'w') as F:
+        F.write(script)
+        F.write('\n')
+    cmd_file.chmod('a+x')
+    return cmd_file
 
 
 #
@@ -79,6 +161,7 @@ def get_template(meta, name, category='template'):
         tconf = [{'user': '~/kea2'},
                  {'system': '/etc/kea2'} ]
 
+
     for tdict in tconf:
         assert len(tdict) == 1
         tname, tpath = list(tdict.items())[0]
@@ -90,28 +173,48 @@ def get_template(meta, name, category='template'):
 
         lg.debug("check for template in: %s", template_folder)
 
-        template_file = Path('{}/{}.k2'.format(template_folder, name))\
+        template_file_1 = Path('{}/{}'.format(template_folder, name))\
+          .expanduser()
+        template_file_2 = Path('{}/{}.k2'.format(template_folder, name))\
           .expanduser()
 
-        print(template_file)
-        if  template_file.exists():
-            lg.debug('loading template for "%s" from "%s"', name, template_file)
-            with open(template_file, 'r') as F:
+        if  template_file_1.exists():
+            lg.debug('loading template for "%s" from "%s"', name, template_file_1)
+            with open(template_file_1, 'r') as F:
+                return F.read()
+
+        if  template_file_2.exists():
+            lg.debug('loading template for "%s" from "%s"', name, template_file_2)
+            with open(template_file_2, 'r') as F:
                 return F.read()
 
         # template was not found -- continue
         lg.debug('cannot find template "%s" here', name)
 
     #still no template - check package resources
-    resname = 'etc//%s/%s.k2' % (category, name)
-    lg.debug("check package resources @ %s", resname)
-    if not pr.resource_exists('kea2', resname):
-        #nothing - quit!
-        lg.critical('cannot find template: "%s"', name)
-        exit(-1)
+    resname1 = 'etc//%s/%s' % (category, name)
+    resname2 = 'etc//%s/%s.k2' % (category, name)
 
-    #read & return
-    return pr.resource_string('kea2', resname).decode('UTF-8')
+    lg.debug("check package resources @ %s", resname1)
+    if pr.resource_exists('kea2', resname1):
+        return pr.resource_string('kea2', resname1).decode('UTF-8')
+    if pr.resource_exists('kea2', resname2):
+        return pr.resource_string('kea2', resname2).decode('UTF-8')
+
+
+    #nothing - quit!
+    lg.critical('cannot find template: "%s"', name)
+    exit(-1)
+
+
+
+
+
+def get_jinja_template(meta, name, location):
+    template = get_template(meta, name, location)
+    jenv = get_jinja_environment()
+    return jenv.from_string(template)
+
 
 
 def list_templates(meta, category='template'):
