@@ -26,10 +26,14 @@ lg = get_logger('k2', 'warning')
 JENV = Environment()
 util.register_jinja2_filters(JENV)
 
+RE_PARFIND = re.compile('(?<!\{)\{\s*\*\s*([A-Za-z_]\w*)?\s*\}(?!\})')
+
 
 def _get_base_argsparse(add_template=True):
     parser = argparse.ArgumentParser()
     parser.add_argument('-x', '--executor', default='simple')
+    parser.add_argument('-v', '--verbose', action='count', default=0)
+    parser.add_argument('-q', '--quiet', action='count', default=0)
     parser.add_argument('-X', '--execute', action='store_const', help='run immediately',
                         const='run', dest='execute')
     parser.add_argument('-N', '--do-not-execute', action='store_const', help='do not run',
@@ -61,6 +65,36 @@ def _simplistic_parse(add_template):
     args, rest = parser.parse_known_args(sysargs)
     return args
 
+def check_cl_src_for_params(meta):
+
+    src = meta['_src']
+    ls = shlex.split(src)
+    parameter_name = 'input'
+    parfound = []
+    for i, elem in enumerate(ls):
+        if not  RE_PARFIND.search(elem):
+            continue
+        parfound.append((i, elem))
+
+    if len(parfound) == 0:
+        return
+    elif len(parfound) == 1:
+        names = ['input']
+    else:
+        names = ['input%d' % (i+1) for i in range(len(parfound))]
+
+    if not '_parameter_order' in meta:
+        meta['_parameter_order'] = []
+        
+    meta['_parameter_order'].extend(names)
+        
+    for i, (no, elem) in enumerate(parfound):
+        ls[no] = '{{%s}}' % names[i]
+        meta[names[i]] = elem
+        meta['_parameters'][names[i]]['implied'] = True
+
+    meta['_src'] = " ".join(ls)
+    
 def phase_one(meta):
 
     """ Identify command line parameters """
@@ -73,14 +107,18 @@ def phase_one(meta):
         meta['_src'] = " ".join(sys.argv[dd_index+1:])
         sys.argv = sys.argv[:dd_index]
         args = _simplistic_parse(add_template=False)
+        meta['_preargs'] = args
+        check_cl_src_for_params(meta)
+        
     else:
         meta['_src_in_argv'] = False
         args = _simplistic_parse(add_template=True)
         lg.info('template name: %s', args.template)
         meta['_src'] = util.get_template(meta, args.template)
+        meta['_preargs'] = args
+        render.find_params(meta)
 
-    meta['_preargs'] = args
-    render.find_params(meta)
+        
 
 def _dictify(d):
     for k, v in d.items():
@@ -102,18 +140,19 @@ def parameter_parse(meta):
 
 
     for p in meta['_parameter_order']:
-
         pdata = meta['_parameters'][p]
-
+        if pdata['implied'] is True:
+            continue
         phelp = pdata.get('help', '')
 
         pdef = pdata.get('default', '').strip()
 
-        if 'int' in pdata['flags']:
+        flags = pdata.get('flags', {})
+        if 'int' in flags:
             ptype = int
             if pdef:
                 pdef = int(pdef)
-        elif 'float' in pdata['flags']:
+        elif 'float' in flags:
             ptype = float
             pdef = float(pdef)
         else:
@@ -122,19 +161,20 @@ def parameter_parse(meta):
         if pdef:
             phelp += ' default: {}'.format(pdef)
 
-        pf = copy.copy(pdata['flags'])
+        pf = copy.copy(flags)
+        
         while 'opt' in pf:
             pf.remove('opt')
         if pf:
             phelp += ' ({})'.format(' '.join(pf))
 
-        if 'opt' in pdata['flags'] or pdef:
+        if 'opt' in flags or pdef:
             pname = '--' + p
         else:
             pname = p
 
         pkwargs = {}
-        if 'multi' in pdata['flags']:
+        if 'multi' in flags:
             pkwargs['nargs'] = '+'
 
         parser.add_argument(pname, type=ptype, help=phelp, default=pdef,
@@ -145,7 +185,12 @@ def parameter_parse(meta):
 
     #now parse arguments - and populate meta
     for p, pdata in meta['_parameters'].items():
-        val = getattr(args, p)
+
+        if pdata['implied'] == True:
+            val = meta[p]
+        else:
+            val = getattr(args, p)
+            
         pval = parameter_expander(p, val)
         if isinstance(pval, list):
             if not '_expanded_parameters' in meta:
@@ -153,22 +198,21 @@ def parameter_parse(meta):
             meta['_expanded_parameters'].append(p)
         meta[p] = pval
 
+
+
 def parameter_expander(pname, value):
     """
 
     """
 
-    re_parfind = re.compile('(?<!\{)\{\s*\*\s*([A-Za-z_]\w*)?\s*\}(?!\})')
-
-    mtch = re_parfind.search(str(value))
+    mtch = RE_PARFIND.search(str(value))
     if mtch is None:
         return value
 
     value = str(value)
-    globpat = re_parfind.sub('*', value)
-    assert re_parfind.search(globpat) is None
+    globpat = RE_PARFIND.sub('*', value)
+    assert RE_PARFIND.search(globpat) is None
     replac = glob.glob(globpat)
-
     cutright = len(value) - mtch.end()
     cutleft = mtch.start()
     def pm(r):
@@ -176,7 +220,10 @@ def parameter_expander(pname, value):
         name = mtch.groups()[0]
         if name is None:
             name = 'g'
-        _t[name] = r[cutleft:-cutright]
+        if cutright == 0:
+            _t[name] = r[cutleft:]
+        else:
+            _t[name] = r[cutleft:-cutright]
         return _t
 
     return [pm(x) for x in replac]
@@ -266,7 +313,14 @@ def k2():
 
     # Phase one - PREPARG - preparse arguments
     phase_one(meta)
+    
+    loglevel = 30\
+      + 10 * meta['_preargs'].quiet \
+      - 10 * meta['_preargs'].verbose
 
+    lg.setLevel(loglevel)
+    
+    
     # Load proper executor
     executor = meta['_preargs'].executor
     lg.info("Executor: %s", executor)
@@ -304,7 +358,7 @@ def k2():
                     yield from expander(meta)
                 break
         else:
-            uid = ''
+            uid = '000'
             if meta['_expanded_parameters']:
                 ep = sorted(meta['_expanded_parameters'])
                 def _fix(v):
@@ -318,7 +372,6 @@ def k2():
 
     for i, meta in enumerate(expander(meta)):
         meta['i'] = i
-
         meta['_blocks']['main'] = meta['_src']
         for bname, block in meta['_blocks'].items():
             try:

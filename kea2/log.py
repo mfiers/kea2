@@ -1,9 +1,12 @@
 
 import logging
+import os
+import sys
+
 from colorlog import ColoredFormatter
 
 color_formatter = ColoredFormatter(
-        "%(log_color)s%(levelname)-8s%(reset)s %(blue)s%(message)s",
+        "%(log_color)sk2%(reset)s %(message)s",
         datefmt=None,
         reset=True,
         log_colors={
@@ -17,7 +20,9 @@ color_formatter = ColoredFormatter(
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger('k2')
-logging.getLogger().handlers[0].setFormatter(color_formatter)
+
+if os.isatty(sys.stderr.fileno()):
+    logging.getLogger().handlers[0].setFormatter(color_formatter)
 
 def get_logger(name, level=None):
     rv = logging.getLogger(name)

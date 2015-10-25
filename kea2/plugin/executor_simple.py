@@ -52,7 +52,8 @@ def pre_execute():
         cmd = util.recursive_render(cmd, meta)
         if i == 0:
             print(cmd)
-        meta['_cmd_file'] = util.script_write(cmd, './kea2', meta['_uid'])
+
+        meta['_cmd_file'] = util.script_write(cmd, './kea2', meta.get('_uid', template_name))
         cmdrunner = util.get_jinja_template(meta, 'command_runner.template', 'executor/' + EXECNAME)
         cmdrunner = util.recursive_render(cmdrunner, meta)
         cmdlist.append(cmdrunner)
@@ -69,9 +70,8 @@ def pre_execute():
 
     runsh = util.get_jinja_template(meta, 'run.template', 'executor/' + EXECNAME).render(global_meta)
 
-    cmd_file = template_name
     lg.info("write command script: %s", CMD_FILE)
-    util.script_write(runsh, '.', template_name, backup_dir='./kea2/backup')
+    CMD_FILE = util.script_write(runsh, '.', template_name, backup_dir='./kea2/backup')
 
 
 

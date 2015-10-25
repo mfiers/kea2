@@ -84,6 +84,7 @@ def get_jinja_environment():
 def script_write(script, dirname, uid, backup_dir=None):
 
     dirname = Path(dirname)
+    
     if backup_dir is None:
         backup_dir = dirname /  'backup'
     else:
